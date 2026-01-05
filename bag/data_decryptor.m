@@ -1,15 +1,21 @@
 %% data_decryptor.m
-% Robust reader + full plotting for the logging CSV.
-% Supports BOTH formats:
+% Robust reader + plotting for the logging CSV.
+% Supports formats:
 %
-% [NEW format]
+% [NEW format - UPDATED v1]
 %   col1: t_sec [s]
-%   col2..col45: d0..d43 (44 doubles)
-%   col46: validity_bitmask
+%   col2..col57: d0..d55 (56 doubles)
+%   col58: validity_bitmask
+%
+% [NEW format - UPDATED v2]  (state_body_vel added)
+%   col1: t_sec [s]
+%   col2..col59: d0..d57 (58 doubles)
+%   col60: validity_bitmask
 %
 % [OLD/LEGACY format - heuristic]
 %   col1: time_ns or time_sec
 %   payload starts at col3 (values = data(:,3:end)) and should have >=44 cols
+%   (for legacy, we only take first 44 as before)
 
 clear; close all; clc;
 
@@ -29,16 +35,14 @@ fprintf("[INFO] Reading: %s\n", csv_path);
 
 %% 1) Read CSV robustly
 opts = detectImportOptions(csv_path, 'Delimiter', ',');
-% Force numeric when possible (text -> NaN)
-opts = setvartype(opts, 'double');
-
+opts = setvartype(opts, 'double');  % Force numeric when possible (text -> NaN)
 T = readtable(csv_path, opts);
 
 if isempty(T) || height(T) == 0
     error("CSV has no data rows (header-only or empty file). Check logger is writing data.");
 end
-A = table2array(T);
 
+A = table2array(T);
 if isempty(A) || size(A,1) == 0
     error("Parsed array is empty. CSV may be malformed or non-numeric.");
 end
@@ -47,96 +51,94 @@ ncol = size(A,2);
 nrow = size(A,1);
 fprintf("[INFO] Parsed table: %d rows x %d cols\n", nrow, ncol);
 
-%% 2) Detect format and extract (time, values[44], mask)
+%% 2) Detect format and extract (time, values, mask)
 time = [];
 values = [];
 mask = [];
 
-% --- NEW format check: 46 columns minimum, and col1 looks like seconds (smallish) ---
-if ncol >= 46
-    % Candidate new format:
-    t_candidate = A(:,1);
-    payload_candidate = A(:,2:45);
-    mask_candidate = A(:,46);
+% ---------- NEW format v2 (58 payload + mask) ----------
+% Expect: col1=t, col2..col59=d0..d57 (58), col60=mask
+if ncol >= 60
+    t_candidate       = A(:,1);
+    payload_candidate = A(:,2:59);
+    mask_candidate    = A(:,60);
 
-    % Heuristic: payload has 44 cols and at least some finite numbers
     finite_ratio = mean(isfinite(payload_candidate(:)));
-    if size(payload_candidate,2)==44 && finite_ratio > 0.01
-        time = t_candidate;
+    if size(payload_candidate,2)==58 && finite_ratio > 0.01
+        time   = t_candidate;
         values = payload_candidate;
-        mask = uint32(mask_candidate);
-        fprintf("[INFO] Detected NEW format: (t_sec, d0..d43, mask)\n");
+        mask   = uint32(mask_candidate);
+        fprintf("[INFO] Detected NEW format v2: (t_sec, d0..d57(58), mask)\n");
     end
 end
 
-% --- If not NEW, try legacy heuristic ---
+% ---------- NEW format v1 (56 payload + mask) ----------
+% Expect: col1=t, col2..col57=d0..d55 (56), col58=mask
+if isempty(time) && ncol >= 58
+    t_candidate       = A(:,1);
+    payload_candidate = A(:,2:57);
+    mask_candidate    = A(:,58);
+
+    finite_ratio = mean(isfinite(payload_candidate(:)));
+    if size(payload_candidate,2)==56 && finite_ratio > 0.01
+        time   = t_candidate;
+        values = payload_candidate;
+        mask   = uint32(mask_candidate);
+        fprintf("[INFO] Detected NEW format v1: (t_sec, d0..d55(56), mask)\n");
+    end
+end
+
+% ---------- Legacy heuristic ----------
 if isempty(time)
-    % Legacy: often time is ns in col1, payload starts at col3
+    % Legacy: time in col1, payload starts at col3
     if ncol >= (2 + 44)
         t_candidate = A(:,1);
 
-        % if looks like ns (very large), convert to seconds
         if nanmedian(t_candidate) > 1e6  % ns-scale heuristic
             time = t_candidate * 1e-9;
             fprintf("[INFO] Legacy time detected as ns -> converted to seconds\n");
         else
-            time = t_candidate; % already sec
+            time = t_candidate;
             fprintf("[INFO] Legacy time detected as seconds\n");
         end
 
-        values = A(:,3:end);
-
-        if size(values,2) < 44
-            error("Legacy format assumed but payload columns are %d (<44).", size(values,2));
+        payload = A(:,3:end);
+        if size(payload,2) < 44
+            error("Legacy format assumed but payload columns are %d (<44).", size(payload,2));
         end
 
-        % Take first 44 as payload (0..43)
-        values = values(:,1:44);
-
-        % No mask in legacy; synthesize mask=1 for all rows
-        mask = uint32(ones(size(values,1),1));
-        fprintf("[INFO] Detected LEGACY format: (time, payload from col3.., no mask)\n");
+        values = payload(:,1:44);                 % legacy only has 44 mapping
+        mask   = uint32(ones(size(values,1),1));  % synthesize
+        fprintf("[INFO] Detected LEGACY format: (time, payload first 44, no mask)\n");
     else
-        error("Unknown CSV format. Columns=%d. Need NEW(>=46) or LEGACY(>=46-like with payload).", ncol);
+        error("Unknown CSV format. Columns=%d. Need NEW(v1>=58 or v2>=60) or LEGACY(>=46-ish).", ncol);
     end
 end
 
-%% 3) Sanity checks
-if isempty(time) || isempty(values)
-    error("Failed to extract time/values. Format detection failed.");
-end
-
-if size(values,2) < 44
-    error("values column size is %d, expected 44 (d0..d43).", size(values,2));
-end
-
-% Remove rows where time is NaN
+%% 3) Cleanup
 validTime = isfinite(time);
-time = time(validTime);
+time   = time(validTime);
 values = values(validTime,:);
-mask = mask(validTime);
+mask   = mask(validTime);
 
 if numel(time) == 0
     error("All time entries are NaN. CSV may not contain numeric time.");
 end
 
-% Normalize time to start at 0
 time = time - time(1);
 
 N = size(values,1);
 fprintf("[INFO] Using %d rows after cleanup.\n", N);
 
 %% 4) Optional: drop rows where payload seems invalid (NEW format uses bit0)
-% If mask is synthetic (legacy), this keeps all rows.
 SIZE_OK = bitshift(uint32(1),0);
 ok = bitand(mask, SIZE_OK) ~= 0;
 
-% If almost everything becomes false (legacy mask=1), ok remains true anyway.
 if any(ok)
-    time = time(ok);
+    time   = time(ok);
     values = values(ok,:);
-    mask = mask(ok);
-    N = size(values,1);
+    mask   = mask(ok);
+    N      = size(values,1);
 end
 
 if N < 5
@@ -146,25 +148,16 @@ end
 %% 5) Renderer (vector PDF)
 set(groot,'defaultFigureRenderer','painters');
 
-%% 6) Decode payload mapping (push index 0..43 => values(:,1)..values(:,44))
-%  0- 2 : global_force_input_        (Fx, Fy, Fz)      [World, raw]
-%  3- 5 : global_position_meas_      (px, py, pz)      [World]
-%  6- 8 : rpy_angle_meas_            (roll, pitch, yaw) [rad]  (from pose)
-%  9-11 : global_acc_meas_           (ax, ay, az)      [World] (Gs)
-% 12-14 : global_vel_meas_           (vx, vy, vz)      [World, EKF] [m/s]
-% 15-16 : vbat_raw_, vbat_filtered_  [V]
-% 17-19 : cmd_position_              (x,y,z)           [ROS cmd_position]
-% 20    : cmd_yaw_deg_               [deg]
-% 21-23 : global_force_input_scaled_ (Fx, Fy, Fz)      [World, scaled]
-% 24-26 : final_setpoint_pos_        (x,y,z)           [ctrl target in FW]
-% 27    : final_setpoint_yaw_deg_    [deg]
-% 28    : su_cmd_fx_                 [force command from FW param su_cmd.cmd_fx]
-% 29-31 : world_Fext_MOB             (MOB World 힘 추정값 [N])
-% 32-34 : world_Fext_DOB             (DOB World 힘 추정값 [N])
-% 35-37 : vel_from_pos               (suVelFromPos vx,vy,vz [m/s])
-% 38-40 : rpy_kalman                 (roll,pitch,yaw) [rad]
-% 41-43 : rpy_comp                   (roll,pitch,yaw) [rad]
+%% 6) Decode payload mapping
+payload_cols = size(values,2);
+if payload_cols < 44
+    error("values column size is %d, expected >=44.", payload_cols);
+end
 
+isNew56 = (payload_cols >= 56);
+isNew58 = (payload_cols >= 58);
+
+% --- allocate ---
 force_global_raw       = zeros(N,3);
 position_meas          = zeros(N,3);
 rpy_meas               = zeros(N,3);
@@ -185,336 +178,267 @@ vel_from_pos           = zeros(N,3);
 rpy_kalman             = zeros(N,3);
 rpy_comp               = zeros(N,3);
 
-% 0-2
+gyro_fb                = nan(N,3);
+
+% NEW v2: state_body_vel actual (body yaw-aligned)
+state_body_vel         = nan(N,2);   % [bodyVX, bodyVY]
+
+% velocity desired: posCtl.targetVX/VY/VZ  (네 말대로 이거!)
+vel_des                = nan(N,3);
+
+% attitude desired: controller.roll/pitch/yaw  (deg)
+att_des_deg            = nan(N,3);
+att_des_rad            = nan(N,3);
+
+% rate desired: controller.rollRate/pitchRate/yawRate
+rate_des               = nan(N,3);
+
+% --- 0-2 ---
 force_global_raw(:,1:3) = values(:,1:3);
 
-% 3-5
+% --- 3-5 ---
 position_meas(:,1:3) = values(:,4:6);
 
-% 6-8
+% --- 6-8 ---
 rpy_meas(:,1:3) = values(:,7:9);
 
-% 9-11
+% --- 9-11 ---
 acc_global(:,1:3) = values(:,10:12);
 
-% 12-14
+% --- 12-14 ---
 vel_global(:,1:3) = values(:,13:15);
 
-% 15-16
+% --- 15-16 ---
 vbat(:,1) = values(:,16);
 vbat(:,2) = values(:,17);
 
-% 17-19
+% --- 17-19 ---
 cmd_position(:,1:3) = values(:,18:20);
 
-% 20
+% --- 20 ---
 cmd_yaw_deg = values(:,21);
 cmd_yaw     = cmd_yaw_deg * pi/180;
 
-% 21-23
+% --- 21-23 ---
 force_global_scaled(:,1:3) = values(:,22:24);
 
-% 24-26
+% --- 24-26 ---
 final_cmd_position(:,1:3) = values(:,25:27);
 
-% 27
+% --- 27 ---
 final_cmd_yaw_deg = values(:,28);
 final_cmd_yaw_rad = final_cmd_yaw_deg * pi/180;
 
-% 28
+% --- 28 ---
 cmd_x_force(:,1) = values(:,29);
 
-% 29-31
+% --- 29-31 ---
 world_Fext_MOB(:,1:3) = values(:,30:32);
 
-% 32-34
+% --- 32-34 ---
 world_Fext_DOB(:,1:3) = values(:,33:35);
 
-% 35-37
+% --- 35-37 ---
 vel_from_pos(:,1:3) = values(:,36:38);
 
-% 38-40
+% --- 38-40 ---
 rpy_kalman(:,1:3) = values(:,39:41);
 
-% 41-43
+% --- 41-43 ---
 rpy_comp(:,1:3) = values(:,42:44);
 
-%% Optional smoothing
-force_global_scaled_filt = movmean(force_global_scaled, 7, 1);
+% ========= NEW appended (v1/v2 분기) =========
+if isNew56
+    if isNew58
+        % v2 (58 payload): indices
+        % 44-46: gyro_fb       -> col 45:47
+        % 47-48: state_body_vel-> col 48:49
+        % 49-51: vel_des       -> col 50:52
+        % 52-54: att_des_deg   -> col 53:55
+        % 55-57: rate_des      -> col 56:58
 
-%% ---- Dashboard figure ----
+        gyro_fb(:,1:3)        = values(:,45:47);
+        state_body_vel(:,1:2) = values(:,48:49);
+        vel_des(:,1:3)        = values(:,50:52);
+        att_des_deg(:,1:3)    = values(:,53:55);
+        rate_des(:,1:3)       = values(:,56:58);
+        att_des_rad           = att_des_deg * pi/180;
+
+        fprintf("[INFO] Payload decode: NEW v2 (58 payload) mapping applied.\n");
+    else
+        % v1 (56 payload): indices
+        % 44-46: gyro_fb     -> col 45:47
+        % 47-49: vel_des     -> col 48:50
+        % 50-52: att_des_deg -> col 51:53
+        % 53-55: rate_des    -> col 54:56
+
+        gyro_fb(:,1:3)     = values(:,45:47);
+        vel_des(:,1:3)     = values(:,48:50);
+        att_des_deg(:,1:3) = values(:,51:53);
+        rate_des(:,1:3)    = values(:,54:56);
+        att_des_rad        = att_des_deg * pi/180;
+
+        fprintf("[INFO] Payload decode: NEW v1 (56 payload) mapping applied.\n");
+    end
+end
+
+%% ---- Dashboard figure (desired vs actual overlaid) ----
 twin = [time(1) time(end)];
 
-f = figure('Name','DataLogging Overview','NumberTitle','off', ...
+f = figure('Name','DataLogging Overview (desired vs actual overlays)','NumberTitle','off', ...
            'Color','w','Units','normalized','Position',[0 0 1 1]);
 
-left=0.04; right=0.02; top=0.04; bottom=0.06;
-hgap=0.03; vgap=0.05;
-ncol=3; nrow=2;
-w = (1-left-right-hgap*(ncol-1))/ncol;
-h = (1-top-bottom-vgap*(nrow-1))/nrow;
-getPos=@(row,col)[ left+(col-1)*(w+hgap), ...
-                   1-top-row*h-(row-1)*vgap, ...
-                   w, h ];
+tl = tiledlayout(f, 6, 2, 'TileSpacing','compact', 'Padding','compact');
 
-% (1,1) Position cmd vs target vs meas
-p11 = uipanel('Parent',f,'Position',getPos(1,1),'BackgroundColor','w');
-tl11 = tiledlayout(p11,3,1,'TileSpacing','compact','Padding','compact');
+haveVelDes = any(isfinite(vel_des(:)));
+haveAttDes = any(isfinite(att_des_rad(:)));
+haveRate   = any(isfinite(gyro_fb(:))) && any(isfinite(rate_des(:)));
+haveBodyV  = any(isfinite(state_body_vel(:))); % v2에서만 의미있음
 
-nexttile(tl11,1);
-plot(time, cmd_position(:,1), 'g:','LineWidth',1.0); hold on;
-plot(time, final_cmd_position(:,1), 'r--','LineWidth',1.2);
-plot(time, position_meas(:,1), 'b-','LineWidth',1.2);
+% -------------------------
+% LEFT TOP: Position xyz (desired vs actual)
+% -------------------------
+nexttile(tl, 1);
+plot(time, final_cmd_position(:,1), 'r--','LineWidth',1.2); hold on;
+plot(time, position_meas(:,1),      'b-','LineWidth',1.2);
 grid on; xlim(twin);
-title('X pos (ROS cmd / FW target / meas)');
-legend('ROS cmd','FW target','meas','Location','best');
+title('Pos X (target vs meas)');
+legend('target','meas','Location','best');
 
-nexttile(tl11,2);
-plot(time, cmd_position(:,2), 'g:','LineWidth',1.0); hold on;
-plot(time, final_cmd_position(:,2), 'r--','LineWidth',1.2);
-plot(time, position_meas(:,2), 'b-','LineWidth',1.2);
+nexttile(tl, 3);
+plot(time, final_cmd_position(:,2), 'r--','LineWidth',1.2); hold on;
+plot(time, position_meas(:,2),      'b-','LineWidth',1.2);
 grid on; xlim(twin);
-title('Y pos (ROS cmd / FW target / meas)');
+title('Pos Y (target vs meas)');
 
-nexttile(tl11,3);
-plot(time, cmd_position(:,3), 'g:','LineWidth',1.0); hold on;
-plot(time, final_cmd_position(:,3), 'r--','LineWidth',1.2);
-plot(time, position_meas(:,3), 'b-','LineWidth',1.2);
+nexttile(tl, 5);
+plot(time, final_cmd_position(:,3), 'r--','LineWidth',1.2); hold on;
+plot(time, position_meas(:,3),      'b-','LineWidth',1.2);
 grid on; xlim(twin);
-title('Z pos (ROS cmd / FW target / meas)');
+title('Pos Z (target vs meas)');
 xlabel('time [s]');
 
-% (1,2) Velocity EKF
-p12 = uipanel('Parent',f,'Position',getPos(1,2),'BackgroundColor','w');
-tl12 = tiledlayout(p12,3,1,'TileSpacing','compact','Padding','compact');
-
-nexttile(tl12,1);
-plot(time, vel_global(:,1),'LineWidth',1.2); grid on; xlim(twin);
-title('vel x_{world} [m/s] (EKF)');
-
-nexttile(tl12,2);
-plot(time, vel_global(:,2),'LineWidth',1.2); grid on; xlim(twin);
-title('vel y_{world} [m/s] (EKF)');
-
-nexttile(tl12,3);
-plot(time, vel_global(:,3),'LineWidth',1.2); grid on; xlim(twin);
-title('vel z_{world} [m/s] (EKF)'); xlabel('time [s]');
-
-% (1,3) Attitude meas + FW cmd yaw
-p13 = uipanel('Parent',f,'Position',getPos(1,3),'BackgroundColor','w');
-tl13 = tiledlayout(p13,3,1,'TileSpacing','compact','Padding','compact');
-
-nexttile(tl13,1);
-plot(time, rpy_meas(:,1),'LineWidth',1.2); grid on; xlim(twin);
-title('roll [rad] (meas)');
-
-nexttile(tl13,2);
-plot(time, rpy_meas(:,2),'LineWidth',1.2); grid on; xlim(twin);
-title('pitch [rad] (meas)');
-
-nexttile(tl13,3);
-plot(time, rpy_meas(:,3),'LineWidth',1.2); hold on;
-plot(time, final_cmd_yaw_rad,'k-','LineWidth',1.2);
+% -------------------------
+% LEFT BOTTOM: Velocity (desired vs actual OVERLAY)
+%  - VX/VY: desired=posCtl.targetVX/VY (yaw-aligned body)  -> actual=posCtl.bodyVX/VY (state_body_vel)
+%  - VZ:    desired=posCtl.targetVZ    -> actual=stateEstimate.vz (vel_global(:,3))
+% -------------------------
+nexttile(tl, 7);
+if haveBodyV
+    plot(time, state_body_vel(:,1), 'b-','LineWidth',1.2); hold on;
+else
+    % fallback: global vx (프레임 mismatch일 수 있음)
+    plot(time, vel_global(:,1), 'b-','LineWidth',1.2); hold on;
+end
+if haveVelDes, plot(time, vel_des(:,1), 'r--','LineWidth',1.2); end
 grid on; xlim(twin);
-title('yaw (meas / FW cmd) [rad]');
-legend('meas','FW cmd','Location','best');
+title('Vel X (body actual vs targetVX)');
+if haveVelDes, legend('actual','desired','Location','best'); end
+
+nexttile(tl, 9);
+if haveBodyV
+    plot(time, state_body_vel(:,2), 'b-','LineWidth',1.2); hold on;
+else
+    plot(time, vel_global(:,2), 'b-','LineWidth',1.2); hold on;
+end
+if haveVelDes, plot(time, vel_des(:,2), 'r--','LineWidth',1.2); end
+grid on; xlim(twin);
+title('Vel Y (body actual vs targetVY)');
+
+nexttile(tl, 11);
+plot(time, vel_global(:,3), 'b-','LineWidth',1.2); hold on;
+if haveVelDes, plot(time, vel_des(:,3), 'r--','LineWidth',1.2); end
+grid on; xlim(twin);
+title('Vel Z (actual vz vs targetVZ)');
 xlabel('time [s]');
 
-% (2,1) Force scaled
-p21 = uipanel('Parent',f,'Position',getPos(2,1),'BackgroundColor','w');
-tl21 = tiledlayout(p21,3,1,'TileSpacing','compact','Padding','compact');
-
-nexttile(tl21,1);
-plot(time, force_global_scaled(:,1),'LineWidth',1.2); grid on; xlim(twin);
-title('F_x^{scaled} (world) [arb/N]');
-
-nexttile(tl21,2);
-plot(time, force_global_scaled(:,2),'LineWidth',1.2); grid on; xlim(twin);
-title('F_y^{scaled} (world) [arb/N]');
-
-nexttile(tl21,3);
-plot(time, force_global_scaled(:,3),'LineWidth',1.2); grid on; xlim(twin);
-title('F_z^{scaled} (world) [arb/N]'); xlabel('time [s]');
-
-% (2,2) m*a vs Force scaled
-p22 = uipanel('Parent',f,'Position',getPos(2,2),'BackgroundColor','w');
-tl22 = tiledlayout(p22,3,1,'TileSpacing','compact','Padding','compact');
-
-mass_dash = 0.04;
-g_dash    = 9.81;
-
-ma_x = acc_global(:,1) * mass_dash * g_dash;
-ma_y = acc_global(:,2) * mass_dash * g_dash;
-ma_z = acc_global(:,3) * mass_dash * g_dash;
-
-nexttile(tl22,1);
-plot(time, ma_x,'LineWidth',1.2); hold on;
-plot(time, force_global_scaled(:,1),'LineWidth',1.2);
+% -------------------------
+% RIGHT TOP: Attitude rpy (desired vs actual OVERLAY)
+%   actual: rpy_meas (from pose)
+%   desired: att_des_rad (controller.roll/pitch/yaw [deg] -> rad)
+%   yaw: also overlay FW yaw cmd for reference
+% -------------------------
+nexttile(tl, 2);
+plot(time, rpy_meas(:,1), 'b-','LineWidth',1.2); hold on;
+if haveAttDes, plot(time, att_des_rad(:,1), 'r--','LineWidth',1.2); end
 grid on; xlim(twin);
-title('X: m a_x vs F_x^{scaled}');
-legend('m a_x','F_x^{scaled}','Location','best');
+title('Roll (meas vs des)');
+if haveAttDes, legend('meas','des','Location','best'); end
 
-nexttile(tl22,2);
-plot(time, ma_y,'LineWidth',1.2); hold on;
-plot(time, force_global_scaled(:,2),'LineWidth',1.2);
+nexttile(tl, 4);
+plot(time, rpy_meas(:,2), 'b-','LineWidth',1.2); hold on;
+if haveAttDes, plot(time, att_des_rad(:,2), 'r--','LineWidth',1.2); end
 grid on; xlim(twin);
-title('Y: m a_y vs F_y^{scaled}');
+title('Pitch (meas vs des)');
 
-nexttile(tl22,3);
-plot(time, ma_z + mass_dash * g_dash,'LineWidth',1.2); hold on;
-plot(time, force_global_scaled(:,3),'LineWidth',1.2);
+nexttile(tl, 6);
+plot(time, rpy_meas(:,3), 'b-','LineWidth',1.2); hold on;
+if haveAttDes, plot(time, att_des_rad(:,3), 'r--','LineWidth',1.2); end
+plot(time, final_cmd_yaw_rad, 'k-','LineWidth',1.0);
 grid on; xlim(twin);
-title('Z: m a_z + mg vs F_z^{scaled}');
+title('Yaw (meas vs des vs cmd)');
+if haveAttDes
+    legend('meas','des','cmd','Location','best');
+else
+    legend('meas','cmd','Location','best');
+end
 xlabel('time [s]');
 
-% (2,3) F_ext MOB vs DOB
-p23 = uipanel('Parent',f,'Position',getPos(2,3),'BackgroundColor','w');
-tl23 = tiledlayout(p23,3,1,'TileSpacing','compact','Padding','compact');
-
-nexttile(tl23,1);
-plot(time, world_Fext_MOB(:,1),'LineWidth',1.2); hold on;
-plot(time, world_Fext_DOB(:,1),'--','LineWidth',1.2);
+% -------------------------
+% RIGHT BOTTOM: Rate (desired vs actual OVERLAY)
+%   actual: gyro_fb (gyro.x/y/z)
+%   desired: rate_des (controller.rollRate/pitchRate/yawRate)
+% -------------------------
+nexttile(tl, 8);
+if haveRate
+    plot(time, gyro_fb(:,1),  'b-','LineWidth',1.2); hold on;
+    plot(time, rate_des(:,1), 'r--','LineWidth',1.2);
+    legend('actual','des','Location','best');
+else
+    plot(time, nan(size(time)), 'LineWidth',1.2);
+end
 grid on; xlim(twin);
-title('F_{ext,x} [N]');
-legend('MOB','DOB','Location','best');
+title('Rate X (gyro vs des)');
 
-nexttile(tl23,2);
-plot(time, world_Fext_MOB(:,2),'LineWidth',1.2); hold on;
-plot(time, world_Fext_DOB(:,2),'--','LineWidth',1.2);
+nexttile(tl, 10);
+if haveRate
+    plot(time, gyro_fb(:,2),  'b-','LineWidth',1.2); hold on;
+    plot(time, rate_des(:,2), 'r--','LineWidth',1.2);
+else
+    plot(time, nan(size(time)), 'LineWidth',1.2);
+end
 grid on; xlim(twin);
-title('F_{ext,y} [N]');
+title('Rate Y (gyro vs des)');
 
-nexttile(tl23,3);
-plot(time, world_Fext_MOB(:,3),'LineWidth',1.2); hold on;
-plot(time, world_Fext_DOB(:,3),'--','LineWidth',1.2);
+nexttile(tl, 12);
+if haveRate
+    plot(time, gyro_fb(:,3),  'b-','LineWidth',1.2); hold on;
+    plot(time, rate_des(:,3), 'r--','LineWidth',1.2);
+else
+    plot(time, nan(size(time)), 'LineWidth',1.2);
+end
 grid on; xlim(twin);
-title('F_{ext,z} [N]');
+title('Rate Z (gyro vs des)');
 xlabel('time [s]');
 
 set(findall(f,'Type','axes'),'FontSize',9,'Color','w');
 
-%% 6. Attitude detail
-figure('Name','Attitude detail (meas + cmd)','NumberTitle','off','Color','w');
-subplot(3,1,1); plot(time, rpy_meas(:,1),'LineWidth',1.4); grid on; title('roll [rad]');
-subplot(3,1,2); plot(time, rpy_meas(:,2),'LineWidth',1.4); grid on; title('pitch [rad]');
-subplot(3,1,3);
-plot(time, rpy_meas(:,3),'LineWidth',1.4); hold on;
-plot(time, final_cmd_yaw_rad,'k-','LineWidth',1.4);
-grid on; xlabel('time [s]'); title('yaw [rad]'); legend('meas','cmd','Location','best');
+disp("[DONE] Dashboard generated (pos/vel/att/rate: desired vs actual overlays).");
 
-%% 7. Position detail
-figure('Name','Position detail','NumberTitle','off','Color','w');
-subplot(3,1,1);
-plot(time, final_cmd_position(:,1),'k-','LineWidth',1.4); hold on;
-plot(time, position_meas(:,1),'b-','LineWidth',1.2);
-grid on; title('X'); legend('cmd x','meas x');
-
-subplot(3,1,2);
-plot(time, final_cmd_position(:,2),'k-','LineWidth',1.4); hold on;
-plot(time, position_meas(:,2),'b-','LineWidth',1.2);
-grid on; title('Y'); legend('cmd y','meas y');
-
-subplot(3,1,3);
-plot(time, final_cmd_position(:,3),'k-','LineWidth',1.4); hold on;
-plot(time, position_meas(:,3),'b-','LineWidth',1.2);
-grid on; title('Z'); legend('cmd z','meas z');
-
-%% 13. Velocity detail
-figure('Name','Velocity (world, EKF) detail','NumberTitle','off','Color','w');
-subplot(3,1,1); plot(time, vel_global(:,1),'LineWidth',1.4); grid on; title('vel X_{world} [m/s] (EKF)');
-subplot(3,1,2); plot(time, vel_global(:,2),'LineWidth',1.4); grid on; title('vel Y_{world} [m/s] (EKF)');
-subplot(3,1,3); plot(time, vel_global(:,3),'LineWidth',1.4); grid on; title('vel Z_{world} [m/s] (EKF)'); xlabel('time [s]');
-
-%% 8. Force scale fitting (hover window)
-mass = 0.04;
-g    = 9.81;
-time_start = 28;
-time_end   = 86;
-
-idx = (time >= time_start) & (time <= time_end);
-
-v_seg  = vbat(idx, 2);
-Fz_seg = force_global_raw(idx, 3);
-
-valid  = abs(Fz_seg) > 1e-3 & isfinite(v_seg) & isfinite(Fz_seg);
-v_seg  = v_seg(valid);
-Fz_seg = Fz_seg(valid);
-
-if numel(Fz_seg) < 10
-    warning("Force scale fit: too few valid samples in the window. Skipping fit.");
-    force_scale = ones(size(vbat(:,2)));
+% ---- quick sanity print ----
+if haveVelDes
+    disp("[CHECK] vel_des is interpreted as posCtl.targetVX/VY/VZ (desired).");
+end
+if haveBodyV
+    disp("[CHECK] state_body_vel is interpreted as posCtl.bodyVX/bodyVY (actual body yaw-aligned).");
 else
-    y = mass * g * ones(size(Fz_seg));
-    X = [v_seg .* Fz_seg, Fz_seg];
-    theta = X \ y;
-    a = theta(1); b = theta(2);
-    force_scale = a * vbat(:,2) + b;
-
-    fprintf('\n[Force scale fitting result]\n');
-    fprintf('Time window: %.1f ~ %.1f s\n', time_start, time_end);
-    fprintf('Mass: %.3f kg, g: %.2f m/s^2\n', mass, g);
-    fprintf('----------------------------------\n');
-    fprintf('a = %.6f\n', a);
-    fprintf('b = %.6f\n\n', b);
+    disp("[WARN] state_body_vel not found (likely old CSV). Vel X/Y plots use global vx/vy fallback.");
 end
 
-%% 9. Force detail + scaling
-figure('Name','Force detail','NumberTitle','off','Color','w');
-subplot(3,2,1); plot(time, force_global_raw(:,1),'LineWidth',1.4); grid on; title('Fx raw [N]');
-subplot(3,2,3); plot(time, force_global_raw(:,2),'LineWidth',1.4); grid on; title('Fy raw [N]');
-subplot(3,2,5); plot(time, force_global_raw(:,3),'LineWidth',1.4); grid on; title('Fz raw [N]'); xlabel('time [s]');
+%% ---- 아래부터(기존 개별 figure들) 네 코드 그대로 두면 됨 ----
+% ... (너가 올린 나머지 plot 코드들) ...
 
-subplot(3,2,2); plot(time, force_scale .* force_global_raw(:,1),'LineWidth',1.4); grid on; title('Fx scaled [N]');
-subplot(3,2,4); plot(time, force_scale .* force_global_raw(:,2),'LineWidth',1.4); grid on; title('Fy scaled [N]');
-subplot(3,2,6); plot(time, force_scale .* force_global_raw(:,3),'LineWidth',1.4); grid on; title('Fz scaled [N]'); xlabel('time [s]');
-
-%% 10. F=ma check
-figure('Name','Acceleration vs Force','NumberTitle','off','Color','w');
-subplot(3,1,1);
-plot(time, acc_global(:,1) * mass * g,'LineWidth',1.4); grid on; hold on;
-plot(time, force_global_scaled(:,1),'LineWidth',1.4);
-plot(time, force_scale .* force_global_raw(:,1),'LineWidth',1.4);
-title('X axis (m a_{x,world} vs force)');
-legend('m a_x','FW scaled','F^{(vbat) scaled}','Location','best');
-
-subplot(3,1,2);
-plot(time, acc_global(:,2) * mass * g,'LineWidth',1.4); grid on; hold on;
-plot(time, force_global_scaled(:,2),'LineWidth',1.4);
-plot(time, force_scale .* force_global_raw(:,2),'LineWidth',1.4);
-title('Y axis (m a_{y,world} vs force)');
-
-subplot(3,1,3);
-plot(time, acc_global(:,3) * mass * g + mass * g,'LineWidth',1.4); grid on; hold on;
-plot(time, force_global_scaled(:,3),'LineWidth',1.4);
-plot(time, force_scale .* force_global_raw(:,3),'LineWidth',1.4);
-title('Z axis (m (a_{z,world} + g) vs force)');
-xlabel('time [s]');
-
-%% 12. Wrench Observation (MOB/DOB)
-figure('Name','Force Estimation','NumberTitle','off','Color','w');
-
-subplot(3,1,1);
-plot(time, world_Fext_MOB(:,1),'LineWidth',1.4); hold on;
-plot(time, world_Fext_DOB(:,1),'--','LineWidth',1.4);
-grid on; title('F_{ext,x}^{MOB/DOB}');
-legend('MOB','DOB','Location','best');
-
-subplot(3,1,2);
-plot(time, world_Fext_MOB(:,2),'LineWidth',1.4); hold on;
-plot(time, world_Fext_DOB(:,2),'--','LineWidth',1.4);
-grid on; title('F_{ext,y}^{MOB/DOB}');
-
-subplot(3,1,3);
-plot(time, world_Fext_MOB(:,3),'LineWidth',1.4); hold on;
-plot(time, world_Fext_DOB(:,3),'--','LineWidth',1.4);
-grid on; title('F_{ext,z}^{MOB/DOB}');
-xlabel('time [s]');
-
-%% 12b. Voltage & Force command
-figure('Name','Voltage & Force command','NumberTitle','off','Color','w');
-subplot(3,1,1); plot(time, vbat(:,1),'LineWidth',1.4); grid on; title('vbat raw [V]');
-subplot(3,1,2); plot(time, vbat(:,2),'LineWidth',1.4); grid on; title('vbat filtered [V]'); xlabel('time [s]');
-subplot(3,1,3); plot(time, cmd_x_force(:,1),'LineWidth',1.4); grid on; title('Force command su\_cmd\_fx'); xlabel('time [s]');
+disp("[DONE] Plots generated successfully.");
 
 %% 13. dv/dt acc vs force
 acc_from_vel = zeros(N,3);

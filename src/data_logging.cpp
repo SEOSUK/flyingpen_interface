@@ -53,6 +53,9 @@ static std::string now_mmddhhmm()
 class DataLoggingNode : public rclcpp::Node
 {
 public:
+  // 기존 56 + state_body_vel(2) = 58
+  static constexpr int kDataLen = 58;
+
   DataLoggingNode()
   : Node("data_logging")
   {
@@ -163,6 +166,31 @@ public:
     sub_kalman_qcomp_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/kalman_qComp", 10,
       std::bind(&DataLoggingNode::kalmanQCompCallback, this, _1));
+
+    // 14) gyro feedback
+    sub_gyro_feedback_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/gyro_feedback", 10,
+      std::bind(&DataLoggingNode::gyroFeedbackCallback, this, _1));
+
+    // 15) state_body_vel (posCtl.bodyVX, posCtl.bodyVY)
+    sub_state_body_vel_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/state_body_vel", 10,
+      std::bind(&DataLoggingNode::stateBodyVelCallback, this, _1));
+
+    // 16) vel_des (posCtl.targetVX, targetVY, targetVZ)
+    sub_vel_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/vel_des", 10,
+      std::bind(&DataLoggingNode::velDesCallback, this, _1));
+
+    // 17) att_des (controller.roll/pitch/yaw)
+    sub_att_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/att_des", 10,
+      std::bind(&DataLoggingNode::attDesCallback, this, _1));
+
+    // 18) rate_des (controller.rollRate/pitchRate/yawRate)
+    sub_rate_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/rate_des", 10,
+      std::bind(&DataLoggingNode::rateDesCallback, this, _1));
   }
 
   ~DataLoggingNode() override
@@ -173,124 +201,128 @@ public:
     }
   }
 
-  // 100 Hz 루프
   void loopOnce()
   {
     std_msgs::msg::Float64MultiArray msg;
-    msg.data.reserve(64);
+    msg.data.reserve(kDataLen);
 
-    // ===== 인덱스 정의 ===== (0..43 = 44개)
-    //  0~ 2 : global_force_input_
-    //  3~ 5 : global_position_meas_
-    //  6~ 8 : rpy_angle_meas_
-    //  9~11 : global_acc_meas_
-    // 12~14 : global_vel_meas_
-    // 15~16 : vbat_raw_, vbat_filtered_
-    // 17~19 : cmd_position_
-    // 20    : cmd_yaw_deg_
-    // 21~23 : global_force_input_scaled_
-    // 24~26 : final_setpoint_pos_
-    // 27    : final_setpoint_yaw_deg_
-    // 28    : su_cmd_fx_
-    // 29~31 : world_Fext_MOB_
-    // 32~34 : world_Fext_DOB_
-    // 35~37 : vel_from_pos_
-    // 38~40 : rpy_kalman_
-    // 41~43 : rpy_comp_
+    // 0~43 : 기존 44개
+    // 44~46 : gyro_feedback (3)
+    // 47~48 : state_body_vel (2)
+    // 49~51 : vel_des (3)
+    // 52~54 : att_des (3)
+    // 55~57 : rate_des (3)
 
-    // 1) global_force_input_ (3)
+    // 0-2
     msg.data.push_back(global_force_input_(0));
     msg.data.push_back(global_force_input_(1));
     msg.data.push_back(global_force_input_(2));
 
-    // 2) global_position_meas (3)
+    // 3-5
     msg.data.push_back(global_position_meas_(0));
     msg.data.push_back(global_position_meas_(1));
     msg.data.push_back(global_position_meas_(2));
 
-    // 3) rpy_angle_meas (3)
+    // 6-8
     msg.data.push_back(rpy_angle_meas_(0));
     msg.data.push_back(rpy_angle_meas_(1));
     msg.data.push_back(rpy_angle_meas_(2));
 
-    // 4) global_acc_meas (3)
+    // 9-11
     msg.data.push_back(global_acc_meas_(0));
     msg.data.push_back(global_acc_meas_(1));
     msg.data.push_back(global_acc_meas_(2));
 
-    // 5) global_vel_meas (3)
+    // 12-14
     msg.data.push_back(global_vel_meas_(0));
     msg.data.push_back(global_vel_meas_(1));
     msg.data.push_back(global_vel_meas_(2));
 
-    // 6) voltage (raw, filtered)
+    // 15-16
     msg.data.push_back(vbat_raw_);
     msg.data.push_back(vbat_filtered_);
 
-    // 7) commanded position / yaw (deg)
+    // 17-20
     msg.data.push_back(cmd_position_(0));
     msg.data.push_back(cmd_position_(1));
     msg.data.push_back(cmd_position_(2));
     msg.data.push_back(cmd_yaw_deg_);
 
-    // 8) global_force_input_scaled_ (3)
+    // 21-23
     msg.data.push_back(global_force_input_scaled_(0));
     msg.data.push_back(global_force_input_scaled_(1));
     msg.data.push_back(global_force_input_scaled_(2));
 
-    // 9) final setpoint pos (3)
+    // 24-27
     msg.data.push_back(final_setpoint_pos_(0));
     msg.data.push_back(final_setpoint_pos_(1));
     msg.data.push_back(final_setpoint_pos_(2));
-
-    // 10) final yaw angle (deg)
     msg.data.push_back(final_setpoint_yaw_deg_);
 
-    // 11) su_cmd_fx
+    // 28
     msg.data.push_back(su_cmd_fx_);
 
-    // 12) MOB
+    // 29-31
     msg.data.push_back(world_Fext_MOB_(0));
     msg.data.push_back(world_Fext_MOB_(1));
     msg.data.push_back(world_Fext_MOB_(2));
 
-    // 13) DOB
+    // 32-34
     msg.data.push_back(world_Fext_DOB_(0));
     msg.data.push_back(world_Fext_DOB_(1));
     msg.data.push_back(world_Fext_DOB_(2));
 
-    // 14) vel_from_pos
+    // 35-37
     msg.data.push_back(vel_from_pos_(0));
     msg.data.push_back(vel_from_pos_(1));
     msg.data.push_back(vel_from_pos_(2));
 
-    // 15) rpy_kalman
+    // 38-40
     msg.data.push_back(rpy_kalman_(0));
     msg.data.push_back(rpy_kalman_(1));
     msg.data.push_back(rpy_kalman_(2));
 
-    // 16) rpy_comp
+    // 41-43
     msg.data.push_back(rpy_comp_(0));
     msg.data.push_back(rpy_comp_(1));
     msg.data.push_back(rpy_comp_(2));
 
-    // ---- sanity: must be 44 ----
-    // If something goes wrong, we will pad to 44 for CSV consistency.
-    if (msg.data.size() < 44) {
+    // 44-46 gyro feedback
+    msg.data.push_back(gyro_fb_(0));
+    msg.data.push_back(gyro_fb_(1));
+    msg.data.push_back(gyro_fb_(2));
+
+    // 47-48 state_body_vel (actual body yaw-aligned VX,VY)
+    msg.data.push_back(state_body_vel_(0));
+    msg.data.push_back(state_body_vel_(1));
+
+    // 49-51 vel_des (desired targetVX,targetVY,targetVZ)
+    msg.data.push_back(vel_des_(0));
+    msg.data.push_back(vel_des_(1));
+    msg.data.push_back(vel_des_(2));
+
+    // 52-54 att_des
+    msg.data.push_back(att_des_(0));
+    msg.data.push_back(att_des_(1));
+    msg.data.push_back(att_des_(2));
+
+    // 55-57 rate_des
+    msg.data.push_back(rate_des_(0));
+    msg.data.push_back(rate_des_(1));
+    msg.data.push_back(rate_des_(2));
+
+    if (msg.data.size() < static_cast<size_t>(kDataLen)) {
       const size_t old = msg.data.size();
-      msg.data.resize(44, std::numeric_limits<double>::quiet_NaN());
+      msg.data.resize(kDataLen, std::numeric_limits<double>::quiet_NaN());
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "data_logging_msg had %zu (<44). padded to 44 with NaN.", old);
-    } else if (msg.data.size() > 44) {
+        "data_logging_msg had %zu (<%d). padded to %d with NaN.", old, kDataLen, kDataLen);
+    } else if (msg.data.size() > static_cast<size_t>(kDataLen)) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "data_logging_msg had %zu (>44). truncating to 44.", msg.data.size());
-      msg.data.resize(44);
+        "data_logging_msg had %zu (>%d). truncating to %d.", msg.data.size(), kDataLen, kDataLen);
+      msg.data.resize(kDataLen);
     }
 
-    // publish topic (original behavior)
     data_pub_->publish(msg);
-
-    // CSV log (new)
     log_csv_row(msg);
 
     have_published_once_ = true;
@@ -300,9 +332,8 @@ private:
   // ---------------- CSV ----------------
   void write_csv_header()
   {
-    // t_sec + d0..d43 + validity_bitmask
     csv_ << "t_sec";
-    for (int i = 0; i < 44; ++i) csv_ << ",d" << i;
+    for (int i = 0; i < kDataLen; ++i) csv_ << ",d" << i;
     csv_ << ",validity_bitmask\n";
     csv_.flush();
   }
@@ -312,26 +343,23 @@ private:
     if (!csv_.is_open()) return;
 
     uint32_t mask = 0u;
-    const bool size_ok = (msg.data.size() == 44);
+    const bool size_ok = (msg.data.size() == static_cast<size_t>(kDataLen));
     if (size_ok) mask |= (1u << 0);
     if (have_published_once_) mask |= (1u << 1);
-    mask |= (1u << 2); // csv open ok
+    mask |= (1u << 2);
 
     const double t = this->get_clock()->now().seconds();
 
     csv_ << std::setprecision(10) << std::fixed;
     csv_ << t;
 
-    // d0..d43
-    for (int i = 0; i < 44; ++i) {
+    for (int i = 0; i < kDataLen; ++i) {
       double v = std::numeric_limits<double>::quiet_NaN();
       if (i < static_cast<int>(msg.data.size())) v = msg.data[i];
       csv_ << "," << v;
     }
-
     csv_ << "," << static_cast<uint64_t>(mask) << "\n";
 
-    // flush policy (protect against "header-only" files)
     ++csv_line_count_;
     if (csv_line_count_ <= 20 || (csv_line_count_ % static_cast<uint64_t>(flush_every_n_) == 0)) {
       csv_.flush();
@@ -398,7 +426,6 @@ private:
   void accCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
     if (msg->values.size() >= 3) {
-      // NOTE: you had "*3" scaling - kept as-is.
       global_acc_meas_(0) = 3.0 * msg->values[0];
       global_acc_meas_(1) = 3.0 * msg->values[1];
       global_acc_meas_(2) = 3.0 * msg->values[2];
@@ -425,7 +452,7 @@ private:
     cmd_position_(0) = msg->x;
     cmd_position_(1) = msg->y;
     cmd_position_(2) = msg->z;
-    cmd_yaw_deg_     = msg->yaw; // deg
+    cmd_yaw_deg_     = msg->yaw;
   }
 
   void setpointPosCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
@@ -456,7 +483,6 @@ private:
 
   void kalmanQCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
-    // [w,x,y,z]
     if (msg->values.size() >= 4) {
       const double w = msg->values[0];
       const double x = msg->values[1];
@@ -476,7 +502,6 @@ private:
 
   void kalmanQCompCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
-    // [w,x,y,z]
     if (msg->values.size() >= 4) {
       const double w = msg->values[0];
       const double x = msg->values[1];
@@ -494,12 +519,54 @@ private:
     }
   }
 
+  void gyroFeedbackCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 3) {
+      gyro_fb_(0) = msg->values[0];
+      gyro_fb_(1) = msg->values[1];
+      gyro_fb_(2) = msg->values[2];
+    }
+  }
+
+  void stateBodyVelCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 2) {
+      state_body_vel_(0) = msg->values[0];
+      state_body_vel_(1) = msg->values[1];
+    }
+  }
+
+  void velDesCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 3) {
+      vel_des_(0) = msg->values[0];
+      vel_des_(1) = msg->values[1];
+      vel_des_(2) = msg->values[2];
+    }
+  }
+
+  void attDesCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 3) {
+      att_des_(0) = msg->values[0];
+      att_des_(1) = msg->values[1];
+      att_des_(2) = msg->values[2];
+    }
+  }
+
+  void rateDesCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 3) {
+      rate_des_(0) = msg->values[0];
+      rate_des_(1) = msg->values[1];
+      rate_des_(2) = msg->values[2];
+    }
+  }
+
   // ================= members =================
 
-  // pub
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr data_pub_;
 
-  // sub
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_input_scaled_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_input_force_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_fext_mob_;
@@ -515,7 +582,12 @@ private:
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_kalman_q_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_kalman_qcomp_;
 
-  // buffers
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_gyro_feedback_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_state_body_vel_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_vel_des_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_att_des_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_rate_des_;
+
   Eigen::Vector3d global_force_input_        = Eigen::Vector3d::Zero();
   Eigen::Vector3d global_force_input_scaled_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d global_position_meas_      = Eigen::Vector3d::Zero();
@@ -529,7 +601,12 @@ private:
   Eigen::Vector3d rpy_kalman_                = Eigen::Vector3d::Zero();
   Eigen::Vector3d rpy_comp_                  = Eigen::Vector3d::Zero();
 
-  // scalars
+  Eigen::Vector3d gyro_fb_       = Eigen::Vector3d::Zero();
+  Eigen::Vector2d state_body_vel_ = Eigen::Vector2d::Zero();
+  Eigen::Vector3d vel_des_       = Eigen::Vector3d::Zero();
+  Eigen::Vector3d att_des_       = Eigen::Vector3d::Zero();
+  Eigen::Vector3d rate_des_      = Eigen::Vector3d::Zero();
+
   double final_setpoint_yaw_deg_ = 0.0;
   double vbat_raw_              = 0.0;
   double vbat_filtered_         = 0.0;
@@ -537,7 +614,6 @@ private:
   double cmd_yaw_deg_           = 0.0;
   double su_cmd_fx_             = 0.0;
 
-  // CSV members
   std::string csv_dir_;
   std::string csv_path_;
   std::ofstream csv_;
@@ -552,9 +628,7 @@ int main(int argc, char * argv[])
 
   auto node = std::make_shared<DataLoggingNode>();
 
-  // 100 Hz
   rclcpp::Rate rate(100.0);
-
   while (rclcpp::ok()) {
     rclcpp::spin_some(node);
     node->loopOnce();
