@@ -17,8 +17,10 @@ public:
   CommandPublisher()
   : Node("command_publisher")
   {
-    cf_position_pub_ = this->create_publisher<crazyflie_interfaces::msg::Position>(
-      "cf2/cmd_position", 10);
+    cf_position_pub_ =
+      this->create_publisher<crazyflie_interfaces::msg::Position>(
+        "cf2/cmd_position",
+        rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
 
     key_pub_ = this->create_publisher<std_msgs::msg::String>(
       "keyboard_input", 10);
@@ -30,7 +32,7 @@ public:
 
     pos_delta_[0] = this->declare_parameter<double>("dx", 0.03);
     pos_delta_[1] = this->declare_parameter<double>("dy", 0.03);
-    pos_delta_[2] = this->declare_parameter<double>("dz", 0.03);
+    pos_delta_[2] = this->declare_parameter<double>("dz", 0.2);
     yaw_delta_deg_ = this->declare_parameter<double>("dyaw_deg", 5.0);
     force_delta_   = this->declare_parameter<double>("df", 0.01);
 

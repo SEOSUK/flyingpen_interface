@@ -30,6 +30,28 @@ def launch_setup(context, *args, **kwargs):
     )
     actions.append(data_logging_node)
 
+    # 3) data_logging_specific 노드
+    data_logging_specific_node = Node(
+        package='flying_pen',
+        executable='data_logging_specific',
+        name='data_logging_specific',
+        output='screen'
+    )
+    actions.append(data_logging_specific_node)
+
+    # 3.5) crazyflie_examples su_interface 노드 같이 실행
+    # (ros2 run crazyflie_examples su_interface 와 동일)
+    su_interface_node = Node(
+        package='crazyflie_examples',
+        executable='su_interface',
+        name='su_interface',
+        output='screen'
+    )
+    # 다른 노드들이 먼저 뜨고 실행되도록 약간 딜레이
+    actions.append(
+        TimerAction(period=0.5, actions=[su_interface_node])
+    )
+
     # 4) rosbag record (/data_logging_msg만)
     bag_record = ExecuteProcess(
         cmd=[
@@ -43,17 +65,17 @@ def launch_setup(context, *args, **kwargs):
 
     # 5) robot_state_publisher (URDF 있으면)
     if os.path.exists(urdf_path):
-      rsp_node = Node(
-          package='robot_state_publisher',
-          executable='robot_state_publisher',
-          name='robot_state_publisher',
-          parameters=[{'robot_description': open(urdf_path, 'r').read()}],
-          output='screen'
-      )
-      # TF가 먼저 올라와야 RViz가 보기 좋으니까 약간만 딜레이
-      actions.append(
-          TimerAction(period=1.0, actions=[rsp_node])
-      )
+        rsp_node = Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            parameters=[{'robot_description': open(urdf_path, 'r').read()}],
+            output='screen'
+        )
+        # TF가 먼저 올라와야 RViz가 보기 좋으니까 약간만 딜레이
+        actions.append(
+            TimerAction(period=1.0, actions=[rsp_node])
+        )
 
     # 6) 네가 만든 rviz_visual 노드
     rviz_visual_node = Node(
@@ -89,3 +111,4 @@ def generate_launch_description():
     return LaunchDescription([
         OpaqueFunction(function=launch_setup)
     ])
+

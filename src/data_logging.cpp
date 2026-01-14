@@ -53,8 +53,18 @@ static std::string now_mmddhhmm()
 class DataLoggingNode : public rclcpp::Node
 {
 public:
-  // 기존 56 + state_body_vel(2) = 58
-  static constexpr int kDataLen = 58;
+  // /data_logging_msg layout:
+  // 0~43  : 기존 44개 (force/pose/rpy/acc/vel/vbat/cmd/setpoint/fext/vel_from_pos/kalman/comp)
+  // 44~46 : gyro_feedback (gyro.x, gyro.y, gyro.z)
+  // 47~48 : state_body_vel (posCtl.bodyVX, posCtl.bodyVY)
+  // 49~51 : vel_des (posCtl.targetVX, posCtl.targetVY, posCtl.targetVZ)
+  // 52~54 : att_des (controller.roll, controller.pitch, controller.yaw)
+  // 55~57 : rate_des (controller.rollRate, controller.pitchRate, controller.yawRate)
+  // 58~59 : flow_predN (kalman_pred.predNX, kalman_pred.predNY)
+  // 60~61 : flow_measN (kalman_pred.measNX, kalman_pred.measNY)
+  // 62~63 : kalman_decouple_var (kalman.aNormF, kalman.alphaDecouple)
+  // 64~66 : acc_kalman (kalman.accX_ext, kalman.accY_ext, kalman.accZ_ext)
+  static constexpr int kDataLen = 67;
 
   DataLoggingNode()
   : Node("data_logging")
@@ -96,101 +106,100 @@ public:
       "/data_logging_msg", 10);
 
     // === subscribers ===
-
-    // 0) ROS cmd_position
     sub_cmd_position_ = this->create_subscription<crazyflie_interfaces::msg::Position>(
       "/cf2/cmd_position", 10,
       std::bind(&DataLoggingNode::cmdPositionCallback, this, _1));
 
-    // 1) Force input raw
     sub_input_force_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/cf_F_input_raw", 10,
       std::bind(&DataLoggingNode::forceCallback, this, _1));
 
-    // 2) Force input scaled
     sub_input_scaled_force_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/cf_F_input_scaled", 10,
       std::bind(&DataLoggingNode::forceScaledCallback, this, _1));
 
-    // 3) Pose
     sub_pose_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
       "/cf2/pose", 10,
       std::bind(&DataLoggingNode::poseCallback, this, _1));
 
-    // 4) Acc
     sub_acc_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/stateEstimate_acc", 10,
       std::bind(&DataLoggingNode::accCallback, this, _1));
 
-    // 5) Velocity (EKF)
     sub_vel_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/stateEstimate_velocity", 10,
       std::bind(&DataLoggingNode::velCallback, this, _1));
 
-    // 6) Voltage
     sub_voltage_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/cf_voltage", 10,
       std::bind(&DataLoggingNode::voltageCallback, this, _1));
 
-    // 7) Final setpoint
     sub_setpoint_pos_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/cf_setpoint_pos", 10,
       std::bind(&DataLoggingNode::setpointPosCallback, this, _1));
 
-    // 8) MOB
     sub_fext_mob_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/cf_Fext_MOB", 10,
       std::bind(&DataLoggingNode::fextMobCallback, this, _1));
 
-    // 9) DOB
     sub_fext_dob_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/cf_Fext_DOB", 10,
       std::bind(&DataLoggingNode::fextDobCallback, this, _1));
 
-    // 10) su_cmd_dbg
     sub_su_cmd_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/su_cmd_dbg", 10,
       std::bind(&DataLoggingNode::suCmdCallback, this, _1));
 
-    // 11) vel_from_pos
     sub_vel_from_pos_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/vel_from_pos", 10,
       std::bind(&DataLoggingNode::velFromPosCallback, this, _1));
 
-    // 12) kalman_q
     sub_kalman_q_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/kalman_q", 10,
       std::bind(&DataLoggingNode::kalmanQCallback, this, _1));
 
-    // 13) kalman_qComp
     sub_kalman_qcomp_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/kalman_qComp", 10,
       std::bind(&DataLoggingNode::kalmanQCompCallback, this, _1));
 
-    // 14) gyro feedback
     sub_gyro_feedback_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/gyro_feedback", 10,
       std::bind(&DataLoggingNode::gyroFeedbackCallback, this, _1));
 
-    // 15) state_body_vel (posCtl.bodyVX, posCtl.bodyVY)
     sub_state_body_vel_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/state_body_vel", 10,
       std::bind(&DataLoggingNode::stateBodyVelCallback, this, _1));
 
-    // 16) vel_des (posCtl.targetVX, targetVY, targetVZ)
     sub_vel_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/vel_des", 10,
       std::bind(&DataLoggingNode::velDesCallback, this, _1));
 
-    // 17) att_des (controller.roll/pitch/yaw)
     sub_att_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/att_des", 10,
       std::bind(&DataLoggingNode::attDesCallback, this, _1));
 
-    // 18) rate_des (controller.rollRate/pitchRate/yawRate)
     sub_rate_des_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
       "/cf2/rate_des", 10,
       std::bind(&DataLoggingNode::rateDesCallback, this, _1));
+
+    // ✅ flow pred/meas
+    sub_flow_predN_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/flow_predN", 10,
+      std::bind(&DataLoggingNode::flowPredNCallback, this, _1));
+
+    sub_flow_measN_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/flow_measN", 10,
+      std::bind(&DataLoggingNode::flowMeasNCallback, this, _1));
+
+    // ✅ kalman decouple vars
+    sub_kalman_decouple_var_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/kalman_decouple_var", 10,
+      std::bind(&DataLoggingNode::kalmanDecoupleVarCallback, this, _1));
+
+    // ✅ NEW: kalman externalized acc (gravity-removed world acc, expected)
+    sub_acc_kalman_ = this->create_subscription<crazyflie_interfaces::msg::LogDataGeneric>(
+      "/cf2/acc_kalman", 10,
+      std::bind(&DataLoggingNode::accKalmanCallback, this, _1));
   }
 
   ~DataLoggingNode() override
@@ -206,93 +215,73 @@ public:
     std_msgs::msg::Float64MultiArray msg;
     msg.data.reserve(kDataLen);
 
-    // 0~43 : 기존 44개
-    // 44~46 : gyro_feedback (3)
-    // 47~48 : state_body_vel (2)
-    // 49~51 : vel_des (3)
-    // 52~54 : att_des (3)
-    // 55~57 : rate_des (3)
-
-    // 0-2
+    // -------------------- pack 0~43 --------------------
     msg.data.push_back(global_force_input_(0));
     msg.data.push_back(global_force_input_(1));
     msg.data.push_back(global_force_input_(2));
 
-    // 3-5
     msg.data.push_back(global_position_meas_(0));
     msg.data.push_back(global_position_meas_(1));
     msg.data.push_back(global_position_meas_(2));
 
-    // 6-8
     msg.data.push_back(rpy_angle_meas_(0));
     msg.data.push_back(rpy_angle_meas_(1));
     msg.data.push_back(rpy_angle_meas_(2));
 
-    // 9-11
     msg.data.push_back(global_acc_meas_(0));
     msg.data.push_back(global_acc_meas_(1));
     msg.data.push_back(global_acc_meas_(2));
 
-    // 12-14
     msg.data.push_back(global_vel_meas_(0));
     msg.data.push_back(global_vel_meas_(1));
     msg.data.push_back(global_vel_meas_(2));
 
-    // 15-16
     msg.data.push_back(vbat_raw_);
     msg.data.push_back(vbat_filtered_);
 
-    // 17-20
     msg.data.push_back(cmd_position_(0));
     msg.data.push_back(cmd_position_(1));
     msg.data.push_back(cmd_position_(2));
     msg.data.push_back(cmd_yaw_deg_);
 
-    // 21-23
     msg.data.push_back(global_force_input_scaled_(0));
     msg.data.push_back(global_force_input_scaled_(1));
     msg.data.push_back(global_force_input_scaled_(2));
 
-    // 24-27
     msg.data.push_back(final_setpoint_pos_(0));
     msg.data.push_back(final_setpoint_pos_(1));
     msg.data.push_back(final_setpoint_pos_(2));
     msg.data.push_back(final_setpoint_yaw_deg_);
 
-    // 28
     msg.data.push_back(su_cmd_fx_);
 
-    // 29-31
     msg.data.push_back(world_Fext_MOB_(0));
     msg.data.push_back(world_Fext_MOB_(1));
     msg.data.push_back(world_Fext_MOB_(2));
 
-    // 32-34
     msg.data.push_back(world_Fext_DOB_(0));
     msg.data.push_back(world_Fext_DOB_(1));
     msg.data.push_back(world_Fext_DOB_(2));
 
-    // 35-37
     msg.data.push_back(vel_from_pos_(0));
     msg.data.push_back(vel_from_pos_(1));
     msg.data.push_back(vel_from_pos_(2));
 
-    // 38-40
     msg.data.push_back(rpy_kalman_(0));
     msg.data.push_back(rpy_kalman_(1));
     msg.data.push_back(rpy_kalman_(2));
 
-    // 41-43
     msg.data.push_back(rpy_comp_(0));
     msg.data.push_back(rpy_comp_(1));
     msg.data.push_back(rpy_comp_(2));
 
+    // -------------------- 44~66 additional debug --------------------
     // 44-46 gyro feedback
     msg.data.push_back(gyro_fb_(0));
     msg.data.push_back(gyro_fb_(1));
     msg.data.push_back(gyro_fb_(2));
 
-    // 47-48 state_body_vel (actual body yaw-aligned VX,VY)
+    // 47-48 state_body_vel (actual yaw-aligned body VX,VY)
     msg.data.push_back(state_body_vel_(0));
     msg.data.push_back(state_body_vel_(1));
 
@@ -311,6 +300,24 @@ public:
     msg.data.push_back(rate_des_(1));
     msg.data.push_back(rate_des_(2));
 
+    // 58-59 flow_predN (predNX,predNY)
+    msg.data.push_back(flow_predN_(0));
+    msg.data.push_back(flow_predN_(1));
+
+    // 60-61 flow_measN (measNX,measNY)
+    msg.data.push_back(flow_measN_(0));
+    msg.data.push_back(flow_measN_(1));
+
+    // 62-63 kalman_decouple_var (aNormF, alphaDecouple)
+    msg.data.push_back(kalman_decouple_var_(0));
+    msg.data.push_back(kalman_decouple_var_(1));
+
+    // 64-66 acc_kalman (kalman.accX_ext, kalman.accY_ext, kalman.accZ_ext)
+    msg.data.push_back(acc_kalman_(0));
+    msg.data.push_back(acc_kalman_(1));
+    msg.data.push_back(acc_kalman_(2));
+
+    // size guard
     if (msg.data.size() < static_cast<size_t>(kDataLen)) {
       const size_t old = msg.data.size();
       msg.data.resize(kDataLen, std::numeric_limits<double>::quiet_NaN());
@@ -324,7 +331,6 @@ public:
 
     data_pub_->publish(msg);
     log_csv_row(msg);
-
     have_published_once_ = true;
   }
 
@@ -426,9 +432,10 @@ private:
   void accCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
   {
     if (msg->values.size() >= 3) {
-      global_acc_meas_(0) = 3.0 * msg->values[0];
-      global_acc_meas_(1) = 3.0 * msg->values[1];
-      global_acc_meas_(2) = 3.0 * msg->values[2];
+      // NOTE: user scaling (existing behavior). Keep as-is.
+      global_acc_meas_(0) = msg->values[0];
+      global_acc_meas_(1) = msg->values[1];
+      global_acc_meas_(2) = msg->values[2];
     }
   }
 
@@ -563,8 +570,45 @@ private:
     }
   }
 
-  // ================= members =================
+  // ✅ flow pred/meas callbacks
+  void flowPredNCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 2) {
+      flow_predN_(0) = msg->values[0];
+      flow_predN_(1) = msg->values[1];
+    }
+  }
 
+  void flowMeasNCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    if (msg->values.size() >= 2) {
+      flow_measN_(0) = msg->values[0];
+      flow_measN_(1) = msg->values[1];
+    }
+  }
+
+  // ✅ kalman decouple var callback
+  void kalmanDecoupleVarCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    // vars: [kalman.aNormF, kalman.alphaDecouple]
+    if (msg->values.size() >= 2) {
+      kalman_decouple_var_(0) = msg->values[0]; // aNormF
+      kalman_decouple_var_(1) = msg->values[1]; // alphaDecouple
+    }
+  }
+
+  // ✅ NEW: kalman acc (externalized)
+  void accKalmanCallback(const crazyflie_interfaces::msg::LogDataGeneric::SharedPtr msg)
+  {
+    // vars: [kalman.accX_ext, kalman.accY_ext, kalman.accZ_ext]
+    if (msg->values.size() >= 3) {
+      acc_kalman_(0) = msg->values[0];
+      acc_kalman_(1) = msg->values[1];
+      acc_kalman_(2) = msg->values[2];
+    }
+  }
+
+  // ================= members =================
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr data_pub_;
 
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_input_scaled_force_;
@@ -588,6 +632,11 @@ private:
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_att_des_;
   rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_rate_des_;
 
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_flow_predN_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_flow_measN_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_kalman_decouple_var_;
+  rclcpp::Subscription<crazyflie_interfaces::msg::LogDataGeneric>::SharedPtr sub_acc_kalman_;
+
   Eigen::Vector3d global_force_input_        = Eigen::Vector3d::Zero();
   Eigen::Vector3d global_force_input_scaled_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d global_position_meas_      = Eigen::Vector3d::Zero();
@@ -601,11 +650,16 @@ private:
   Eigen::Vector3d rpy_kalman_                = Eigen::Vector3d::Zero();
   Eigen::Vector3d rpy_comp_                  = Eigen::Vector3d::Zero();
 
-  Eigen::Vector3d gyro_fb_       = Eigen::Vector3d::Zero();
+  Eigen::Vector3d gyro_fb_        = Eigen::Vector3d::Zero();
   Eigen::Vector2d state_body_vel_ = Eigen::Vector2d::Zero();
-  Eigen::Vector3d vel_des_       = Eigen::Vector3d::Zero();
-  Eigen::Vector3d att_des_       = Eigen::Vector3d::Zero();
-  Eigen::Vector3d rate_des_      = Eigen::Vector3d::Zero();
+  Eigen::Vector3d vel_des_        = Eigen::Vector3d::Zero();
+  Eigen::Vector3d att_des_        = Eigen::Vector3d::Zero();
+  Eigen::Vector3d rate_des_       = Eigen::Vector3d::Zero();
+
+  Eigen::Vector2d flow_predN_ = Eigen::Vector2d::Zero();
+  Eigen::Vector2d flow_measN_ = Eigen::Vector2d::Zero();
+  Eigen::Vector2d kalman_decouple_var_ = Eigen::Vector2d::Zero();
+  Eigen::Vector3d acc_kalman_ = Eigen::Vector3d::Zero();
 
   double final_setpoint_yaw_deg_ = 0.0;
   double vbat_raw_              = 0.0;

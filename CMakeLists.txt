@@ -32,6 +32,16 @@ ament_target_dependencies(data_logging
   tf2_ros
 )
 
+add_executable(data_logging_specific src/data_logging_specific.cpp)
+ament_target_dependencies(data_logging_specific
+  rclcpp
+  std_msgs
+  geometry_msgs
+  crazyflie_interfaces
+  tf2
+  tf2_ros
+)
+
 # 실행파일 추가 (새로운 data_player)
 add_executable(data_player src/data_player.cpp)
 ament_target_dependencies(data_player
@@ -58,12 +68,14 @@ ament_target_dependencies(command_publisher
 
 # Eigen3은 ament dependency가 아니라 include 디렉토리로 직접 추가
 target_include_directories(data_logging PRIVATE ${EIGEN3_INCLUDE_DIRS})
+target_include_directories(data_logging_specific PRIVATE ${EIGEN3_INCLUDE_DIRS})
 target_include_directories(rviz_visual PRIVATE ${EIGEN3_INCLUDE_DIRS})
 target_link_libraries(command_publisher ncurses)
 
 # 설치 (ros2 run 할 수 있게)
 install(TARGETS
   data_logging
+  data_logging_specific
   data_player
   rviz_visual
   command_publisher  

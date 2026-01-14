@@ -342,28 +342,41 @@ legend('meas', 'cmd', 'Location', 'best');
 %% 7. Position only (ROS cmd vs FW target vs meas)
 figure('Name', 'Position detail', 'NumberTitle', 'off', 'Color', 'w');
 
+% 1) norm 계산
+% 1) norm 계산
+acc_global_norm = vecnorm(acc_global, 2, 2);   % sqrt(ax^2 + ay^2 + az^2)
+
+% 2) low-pass filter (1st-order IIR)
+fc = 0.3;                           % [Hz] 컷오프 (원하는 값으로 조절)
+dt = median(diff(time));          % [s] 샘플 타임 (time이 초 단위라고 가정)
+tau = 1/(2*pi*fc);                % time constant
+alpha = dt/(tau + dt);            % 0~1
+
+acc_global_norm_lpf = zeros(size(acc_global_norm));
+acc_global_norm_lpf(1) = acc_global_norm(1);
+for k = 2:length(acc_global_norm)
+    acc_global_norm_lpf(k) = acc_global_norm_lpf(k-1) + alpha*(acc_global_norm(k) - acc_global_norm_lpf(k-1));
+end
+
 subplot(3,1,1);
 plot(time, final_cmd_position(:,1), 'r--', 'LineWidth', 1.4); hold on;
 plot(time, position_meas(:,1), 'b-', 'LineWidth', 1.2);
+plot(time, acc_global_norm_lpf, 'k', 'LineWidth', 1.6);
 grid on;
-xlim([17 37])
-ylim([-0.2 0.2])
-legend('cmd x', 'meas x');
+legend('cmd x', 'meas x', '|acc| lpf');
 
 subplot(3,1,2);
 plot(time, final_cmd_position(:,2), 'r--', 'LineWidth', 1.4); hold on;
 plot(time, position_meas(:,2), 'b-', 'LineWidth', 1.2);
 grid on;
-xlim([17 37])
-ylim([-0.2 0.2])
 legend('cmd y', 'meas y');
 
 subplot(3,1,3);
 plot(time, final_cmd_position(:,3), 'r--', 'LineWidth', 1.4); hold on;
 plot(time, position_meas(:,3), 'b-', 'LineWidth', 1.2);
 grid on;
-xlim([17 37])
 legend('cmd z', 'meas z');
+
 
 %% 13. Velocity (world, EKF) detail
 figure('Name', 'Velocity (world, EKF) detail', 'NumberTitle', 'off', 'Color', 'w');
@@ -371,15 +384,18 @@ figure('Name', 'Velocity (world, EKF) detail', 'NumberTitle', 'off', 'Color', 'w
 subplot(3,1,1);
 plot(time, vel_global(:,1), 'LineWidth', 1.4);
 grid on; title('vel X_{world} [m/s] (EKF)');
+xlim([17 58])
 
 subplot(3,1,2);
 plot(time, vel_global(:,2), 'LineWidth', 1.4);
 grid on; title('vel Y_{world} [m/s] (EKF)');
+xlim([17 58])
 
 subplot(3,1,3);
 plot(time, vel_global(:,3), 'LineWidth', 1.4);
 grid on; title('vel Z_{world} [m/s] (EKF)');
 xlabel('time [s]');
+xlim([17 58])
 
 %% 8. Force scale fitting (호버 구간에서 Fz↔m*g 맞추기)
 mass = 0.04;  % [kg]
@@ -521,15 +537,21 @@ figure('Name', 'Acceleration (world) detail', 'NumberTitle', 'off', 'Color', 'w'
 subplot(3,1,1);
 plot(time, acc_global(:,1), 'LineWidth', 1.4);
 grid on; title('acc X_{world} [G]');
-
+xlim([17 58])
+ylim([-1.2 0.2])
 subplot(3,1,2);
 plot(time, acc_global(:,2), 'LineWidth', 1.4);
 grid on; title('acc Y_{world} [G]');
+xlim([17 58])
+ylim([-0.6 0.6])
 
 subplot(3,1,3);
 plot(time, acc_global(:,3), 'LineWidth', 1.4);
 grid on; title('acc Z_{world} [G]');
 xlabel('time [s]');
+xlim([17 58])
+ylim([-0.6 0.6])
+
 
 %% 12. Wrench Observation (MOB/DOB + Force command)
 figure('Name', 'Force Estimation', 'NumberTitle', 'off', 'Color', 'w');
@@ -654,27 +676,6 @@ title('overlay: Fext / pitch / vel / force (x)');
 legend('F_{ext} MOB (x)', 'F_{ext} DOB (x)', 'pitch [rad]', ...
     'vel-from-pos (x)', 'Force scaled (x)', 'Location', 'best');
 
-%% Interaction (기존 코드 + force_global_scaled_filt 사용 가능)
-figure('Name', 'Interaction', 'NumberTitle', 'off', 'Color', 'w');
-
-subplot(3,1,1);
-plot(time, final_cmd_position(:,1), 'k-', 'LineWidth', 1.4); hold on;
-plot(time, position_meas(:,1), 'b-', 'LineWidth', 1.2);
-legend('cmd pos', 'pos');
-grid on; xlim([62 102]);
-
-subplot(3,1,2);
-plot(time, world_Fext_MOB(:,1), 'LineWidth', 1.4); hold on;
-plot(time, world_Fext_DOB(:,1), '--', 'LineWidth', 1.4);
-plot(time, force_global_scaled_filt(:,1), 'LineWidth', 1.4);
-legend('Estimated F_{ext} from MOB', 'Estimated F_{ext} from DOB', 'Force scaled filt');
-grid on; xlim([62 102]);
-
-subplot(3,1,3);
-plot(time, force_global_scaled(:,1), 'LineWidth', 1.4);
-grid on; xlim([62 102]);
-legend('Force Input');
-
 %% Interaction (5 panels)
 figure('Name', 'Interaction (5 panels)', 'NumberTitle', 'off', 'Color', 'w');
 
@@ -714,7 +715,7 @@ title('Roll [rad]');
 legend('kalman (q->rpy)', 'comp (qComp->rpy)', 'Location', 'best');
 
 subplot(3,1,2);
-plot(time, rpy_kalman(:,2), '-', 'LineWidth', 1.4); hold on; grid on;
+plot(time, rpy_meas(:,2), '-', 'LineWidth', 1.4); hold on; grid on;
 plot(time, rpy_comp(:,2), '-', 'LineWidth', 1.6);
 title('Pitch [rad]');
 legend('kalman (q->rpy)', 'comp (qComp->rpy)', 'Location', 'best');
